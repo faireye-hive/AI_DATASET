@@ -9,6 +9,9 @@
 * { box-sizing: border-box }
 body { max-width: 70rem; margin: auto; padding: clamp(1rem, 4vw, 3rem) }
 header { margin-bottom: 1.5rem }
+header nav { display: flex; flex-wrap: wrap; gap: .6rem; margin-bottom: 1rem }
+header nav a { padding: .35rem .7rem; border-radius: 8px; color: #5143b0 }
+header nav [aria-current] { background: #ede9ff; font-weight: 700 }
 h1, h2 { margin: 0; line-height: 1.2 }
 h1 { font-size: clamp(1.8rem, 4vw, 2.7rem) }
 h2 { font-size: 1.2rem }
@@ -48,6 +51,10 @@ dialog::backdrop { background: #20203399 }
 </head>
 <body>
 <header>
+  <nav aria-label="Ferramentas">
+    <a href="editor.html" aria-current="page">Editor de conversas</a>
+    <a href="chat.html">Laboratório de chat</a>
+  </nav>
   <p class="kicker">AI DATASET / CONVERSA</p>
   <h1>Editor de conversas</h1>
   <p class="hint">Escreva o que a pessoa diria e a resposta que você quer ensinar ao modelo.</p>

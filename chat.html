@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Laboratório de chat · AI Dataset</title>
+<style>
+:root { color-scheme: light; font: 16px/1.55 system-ui, sans-serif; color: #212127; background: #f6f6f8 }
+* { box-sizing: border-box }
+body { max-width: 72rem; margin: auto; padding: clamp(1rem, 4vw, 3rem) }
+nav, .actions { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center }
+nav a { padding: .35rem .7rem; border-radius: 8px; color: #5143b0 }
+nav [aria-current] { background: #ede9ff; font-weight: 700 }
+h1, h2 { margin: 0; line-height: 1.2 }
+h1 { margin-top: 1rem; font-size: clamp(1.8rem, 4vw, 2.7rem) }
+h2 { font-size: 1.2rem }
+p { margin: .5rem 0 }
+header { margin-bottom: 1.3rem }
+main { display: grid; grid-template-columns: minmax(0, 17rem) minmax(0, 1fr); gap: 1rem; align-items: start }
+section, aside { background: #fff; border: 1px solid #dedee7; border-radius: 14px; padding: 1.15rem; min-width: 0 }
+fieldset { border: 0; padding: 0; margin: .8rem 0 0; min-width: 0 }
+label, summary { font-weight: 650 }
+select, textarea, input[type=number], button { font: inherit; color: inherit; border: 1px solid #d0d0de; border-radius: 8px; padding: .45rem .65rem; background: white }
+select, textarea, input[type=number] { display: block; width: 100%; margin: .25rem 0 .7rem }
+textarea { resize: vertical; min-height: 5rem }
+button, summary { cursor: pointer }
+button:disabled { opacity: .55; cursor: default }
+button.primary { background: #5143b0; color: white; border-color: #5143b0 }
+:focus-visible { outline: 2px solid #5345b5; outline-offset: 2px }
+.hint, small { color: #575765 }
+#status { min-height: 1.5rem; margin-bottom: 0 }
+#status.error { color: #9e2323 }
+#transcript { max-height: min(52vh, 42rem); overflow: auto; margin: .75rem 0 }
+.turn { display: grid; gap: .45rem; margin-bottom: .9rem }
+.bubble { padding: .65rem .8rem; border: 1px solid #e5e3f0; border-radius: 10px; min-width: 0 }
+.question { background: #efecff; width: fit-content; max-width: 100%; justify-self: end }
+.answer { background: #fafafa }
+.answer details { margin-top: .45rem; border-top: 1px solid #e5e3f0; padding-top: .35rem }
+.message { white-space: pre-wrap; overflow-wrap: anywhere; margin: .25rem 0 0 }
+@media (max-width: 720px) { main { grid-template-columns: 1fr } }
+</style>
+<script src="chat.js" defer></script>
+</head>
+<body>
+<header>
+  <nav aria-label="Ferramentas">
+    <a href="editor.html">Editor de conversas</a>
+    <a href="chat.html" aria-current="page">Laboratório de chat</a>
+  </nav>
+  <h1>Laboratório de chat</h1>
+  <p class="hint">Teste o Qwen3-0.6B original ou um LoRA que você treinou.</p>
+</header>
+<main>
+  <aside aria-labelledby="settings-title">
+    <h2 id="settings-title">Configuração</h2>
+    <fieldset id="settings">
+      <label for="model">Modelo</label>
+      <select id="model"><option value="">Qwen3-0.6B original</option></select>
+      <button id="refresh" type="button">Atualizar adaptadores</button>
+      <p><label><input id="think" type="checkbox"> Ativar modo Think</label></p>
+      <label for="limit">Máximo de tokens gerados</label>
+      <input id="limit" type="number" min="16" max="2048" step="1" value="256" required form="composer">
+      <small>Com Think ligado, o limite inclui o raciocínio e a resposta.</small>
+      <p><label for="system">Instrução de sistema (opcional)</label></p>
+      <textarea id="system" placeholder="Ex.: Você se chama Ialora. Responda em português."></textarea>
+    </fieldset>
+  </aside>
+  <section aria-labelledby="conversation-title">
+    <h2 id="conversation-title">Conversa</h2>
+    <div id="transcript" tabindex="0" aria-label="Histórico da conversa"></div>
+    <form id="composer">
+      <label for="prompt">Sua mensagem</label>
+      <textarea id="prompt" rows="3"></textarea>
+      <div class="actions">
+        <button class="primary" id="send" type="submit">Enviar</button>
+        <button id="retry" type="button" disabled>Repetir última pergunta</button>
+        <button id="reset" type="button" disabled>Nova conversa</button>
+      </div>
+      <p id="status" role="status"></p>
+    </form>
+  </section>
+</main>
+</body>
+</html>
