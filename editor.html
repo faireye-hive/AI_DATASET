@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Editor de conversas · AI Dataset</title>
+<style>
+:root { color-scheme: light; font: 16px/1.55 system-ui, sans-serif; color: #212127; background: #f6f6f8 }
+* { box-sizing: border-box }
+body { max-width: 70rem; margin: auto; padding: clamp(1rem, 4vw, 3rem) }
+header { margin-bottom: 1.5rem }
+h1, h2 { margin: 0; line-height: 1.2 }
+h1 { font-size: clamp(1.8rem, 4vw, 2.7rem) }
+h2 { font-size: 1.2rem }
+p { margin: .55rem 0 }
+.kicker { color: #5345b5; font-weight: 700; font-size: .8rem; letter-spacing: .08em }
+main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 1rem; align-items: start }
+section { background: #fff; border: 1px solid #dedee7; border-radius: 14px; padding: 1.15rem; min-width: 0 }
+label, summary { font-weight: 650 }
+select, textarea, button { font: inherit; color: inherit; border: 1px solid #d0d0de; border-radius: 8px; padding: .5rem .7rem; background: white }
+select, textarea { display: block; width: 100%; margin: .3rem 0 .7rem }
+textarea { resize: vertical; min-height: 5rem }
+button, summary { cursor: pointer }
+button:hover { background: #f1efff }
+button:disabled { cursor: default; opacity: .5 }
+button.primary, button[aria-current=true] { background: #5143b0; color: #fff; border-color: #5143b0 }
+:focus-visible { outline: 2px solid #5345b5; outline-offset: 2px }
+.actions { display: flex; gap: .5rem; flex-wrap: wrap; margin: .75rem 0 }
+#records { display: grid; gap: .35rem; max-height: 17rem; overflow: auto }
+#records button { text-align: left; overflow-wrap: anywhere }
+#status { min-height: 1.6rem; margin-top: 1rem; color: #376045 }
+#status.error { color: #9e2323 }
+small, .hint { color: #575765 }
+hr { border: 0; border-top: 1px solid #e8e8ee; margin: 1rem 0 }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #f6f6f8; padding: .7rem }
+@media (max-width: 690px) { main { grid-template-columns: 1fr } }
+</style>
+</head>
+<body>
+<header>
+  <p class="kicker">AI DATASET / CONVERSA</p>
+  <h1>Editor de conversas</h1>
+  <p class="hint">Escreva o que a pessoa diria e a resposta que você quer ensinar ao modelo.</p>
+</header>
+<main>
+  <section aria-labelledby="collection-title">
+    <h2 id="collection-title">Coleção</h2>
+    <label for="split">Conjunto</label>
+    <select id="split">
+      <option value="treino">Treino</option>
+      <option value="validacao">Validação</option>
+      <option value="teste">Teste</option>
+    </select>
+    <p id="count" class="hint"></p>
+    <div id="records"></div>
+    <div class="actions">
+      <button type="button" id="new">Nova conversa</button>
+    </div>
+    <hr>
+    <div class="actions">
+      <button type="button" id="import">Importar JSONL</button>
+      <input id="file" type="file" accept=".jsonl,.txt" hidden>
+      <button type="button" class="primary" id="export">Baixar JSONL</button>
+    </div>
+    <small>A importação acrescenta conversas ao conjunto aberto. Baixe cópias dos seus rascunhos.</small>
+  </section>
+  <section aria-labelledby="conversation-title">
+    <h2 id="conversation-title">Conversa</h2>
+    <div id="editor"></div>
+    <p id="status" role="status" aria-live="polite"></p>
+  </section>
+</main>
+<script>
+"use strict";
+
+const $ = id => document.getElementById(id);
+const key = "ai-dataset-chat-v1";
+const groups = { treino: [], validacao: [], teste: [] };
+const labels = { treino: "Treino", validacao: "Validação", teste: "Teste" };
+let split = "treino";
+let selected = -1;
+let loadError = "";
+try {
+  const stored = JSON.parse(localStorage.getItem(key));
+  for (const name of Object.keys(groups)) {
+    if (Array.isArray(stored?.[name])) groups[name] = stored[name];
+  }
+} catch {
+  loadError = "Não foi possível ler os rascunhos deste navegador.";
+}
+
+function status(text, error = false) {
+  $("status").textContent = text;
+  $("status").classList.toggle("error", error);
+}
+
+function save() {
+  try {
+    localStorage.setItem(key, JSON.stringify(groups));
+    return true;
+  } catch {
+    status("O navegador não salvou o rascunho. Baixe o JSONL para guardar uma cópia.", true);
+    return false;
+  }
+}
+
+function current() {
+  return groups[split][selected];
+}
+
+function createDraft() {
+  return { system: "", turns: [{ user: "", assistant: "" }] };
+}
+
+function recordFor(draft) {
+  const messages = draft.system.trim() ? [{ role: "system", content: draft.system.trim() }] : [];
+  for (const turn of draft.turns) {
+    messages.push({ role: "user", content: turn.user.trim() });
+    messages.push({ role: "assistant", content: turn.assistant.trim() });
+  }
+  return { messages };
+}
+
+function draftFor(record) {
+  if (!record || Object.keys(record).length !== 1 || !Array.isArray(record.messages)) {
+    throw new Error('Esperado um objeto com a chave "messages".');
+  }
+  const draft = { system: "", turns: [] };
+  const first = record.messages[0]?.role === "system" ? 1 : 0;
+  if (record.messages.length <= first || (record.messages.length - first) % 2) {
+    throw new Error("Adicione pares completos de usuário e assistente.");
+  }
+  record.messages.forEach((message, index) => {
+    const role = index < first ? "system" : ["user", "assistant"][(index - first) % 2];
+    if (!message || Object.keys(message).length !== 2 || message.role !== role ||
+        typeof message.content !== "string" || !message.content.trim()) {
+      throw new Error("Mensagem " + (index + 1) + ": esperado texto no papel " + role + ".");
+    }
+    if (/<\|[^\s<>]*\|>|<\/?(?:think|tool_call|tool_response)>|\x00|[\uD800-\uDFFF]/u.test(message.content)) {
+      throw new Error("Mensagem " + (index + 1) + ": marcador reservado ou Unicode inválido.");
+    }
+    if (role === "system") draft.system = message.content.trim();
+    if (role === "user") draft.turns.push({ user: message.content.trim(), assistant: "" });
+    if (role === "assistant") draft.turns.at(-1).assistant = message.content.trim();
+  });
+  return draft;
+}
+
+function button(text, action) {
+  const element = document.createElement("button");
+  element.type = "button";
+  element.textContent = text;
+  element.addEventListener("click", action);
+  return element;
+}
+
+function recordName(draft, index) {
+  const name = draft.turns[0]?.user.trim().replace(/\s+/g, " ").slice(0, 65);
+  return (index + 1) + ". " + (name || "Rascunho");
+}
+
+function drawList() {
+  $("records").replaceChildren(...groups[split].map((draft, index) => {
+    const item = button(recordName(draft, index), () => {
+      selected = index;
+      status("");
+      draw();
+    });
+    item.setAttribute("aria-current", String(index === selected));
+    return item;
+  }));
+  const count = groups[split].length;
+  $("count").textContent = count + (count === 1 ? " conversa" : " conversas");
+  $("export").disabled = count === 0;
+}
+
+function draw() {
+  drawList();
+  const editor = $("editor");
+  editor.replaceChildren();
+  const draft = current();
+  if (!draft) {
+    editor.textContent = "Crie uma conversa ou importe um arquivo JSONL para começar.";
+    return;
+  }
+
+  const preview = document.createElement("pre");
+  const refreshPreview = () => { preview.textContent = JSON.stringify(recordFor(draft)); };
+  function field(title, target, property) {
+    const label = document.createElement("label");
+    label.textContent = title;
+    const input = document.createElement("textarea");
+    input.value = target[property];
+    input.addEventListener("input", () => {
+      target[property] = input.value;
+      status("");
+      save();
+      $("records").children[selected].textContent = recordName(draft, selected);
+      refreshPreview();
+    });
+    label.append(input);
+    editor.append(label);
+  }
+
+  field("Instrução de sistema (opcional)", draft, "system");
+  draft.turns.forEach((turn, index) => {
+    editor.append(document.createElement("hr"));
+    field("Usuário · turno " + (index + 1), turn, "user");
+    field("Assistente · turno " + (index + 1), turn, "assistant");
+    if (draft.turns.length > 1) {
+      editor.append(button("Remover turno " + (index + 1), () => {
+        if (!confirm("Remover este turno?")) return;
+        draft.turns.splice(index, 1);
+        save();
+        draw();
+      }));
+    }
+  });
+
+  const actions = document.createElement("div");
+  actions.className = "actions";
+  actions.append(button("Adicionar turno", () => {
+    draft.turns.push({ user: "", assistant: "" });
+    save();
+    draw();
+    editor.querySelectorAll("textarea")[draft.turns.length * 2 - 1].focus();
+  }), button("Excluir conversa", () => {
+    if (!confirm("Excluir esta conversa?")) return;
+    groups[split].splice(selected, 1);
+    selected = Math.min(selected, groups[split].length - 1);
+    save();
+    draw();
+  }));
+  const details = document.createElement("details");
+  const summary = document.createElement("summary");
+  summary.textContent = "Ver linha JSONL";
+  details.append(summary, preview);
+  refreshPreview();
+  editor.append(actions, details);
+}
+
+$("split").addEventListener("change", () => {
+  split = $("split").value;
+  selected = groups[split].length ? 0 : -1;
+  status("");
+  draw();
+});
+$("new").addEventListener("click", () => {
+  groups[split].push(createDraft());
+  selected = groups[split].length - 1;
+  status("");
+  save();
+  draw();
+  $("editor").querySelectorAll("textarea")[1].focus();
+});
+
+$("import").addEventListener("click", () => $("file").click());
+$("file").addEventListener("change", async () => {
+  const file = $("file").files[0];
+  const destination = split;
+  if (!file) return;
+  try {
+    const contents = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(await file.arrayBuffer());
+    const lines = contents.split(/\r?\n/);
+    if (lines.at(-1) === "") lines.pop();
+    if (!lines.length) throw new Error("O arquivo está vazio.");
+    const imported = lines.map((line, index) => {
+      try {
+        return draftFor(JSON.parse(line));
+      } catch (error) {
+        throw new Error("Linha " + (index + 1) + ": " + error.message);
+      }
+    });
+    const start = groups[destination].length;
+    groups[destination].push(...imported);
+    if (split === destination) selected = start;
+    if (save()) status(imported.length + " conversas importadas em " + labels[destination] + ".");
+    draw();
+  } catch (error) {
+    status(error.message, true);
+  } finally {
+    $("file").value = "";
+  }
+});
+
+$("export").addEventListener("click", () => {
+  try {
+    const seen = new Map();
+    for (const [name, drafts] of Object.entries(groups)) {
+      drafts.forEach((draft, index) => {
+        const record = recordFor(draft);
+        const location = labels[name] + " " + (index + 1);
+        try {
+          draftFor(record);
+        } catch (error) {
+          if (name === split) throw new Error(location + ": " + error.message);
+          return;
+        }
+        const line = JSON.stringify(record);
+        if (seen.has(line) && (name === split || seen.get(line).name === split)) {
+          throw new Error(location + " repete a conversa de " + seen.get(line).location + ".");
+        }
+        if (!seen.has(line) || name === split) seen.set(line, { name, location });
+      });
+    }
+    const jsonl = groups[split].map(draft => JSON.stringify(recordFor(draft))).join("\n") + "\n";
+    const url = URL.createObjectURL(new Blob([jsonl], { type: "application/x-ndjson;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = split + ".jsonl";
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    status("JSONL exportado. Use dataset.py para conferir os tokens do Qwen.");
+  } catch (error) {
+    status(error.message, true);
+  }
+});
+
+selected = groups[split].length ? 0 : -1;
+draw();
+if (loadError) status(loadError, true);
+</script>
+</body>
+</html>
