@@ -140,7 +140,8 @@ function readImport(text, filename) {
 const roleColumnNames = {
   user: ["user", "usuario", "prompt", "input", "pergunta", "question", "instruction", "instrucao"],
   assistant: ["assistant", "assistente", "resposta", "answer", "completion", "response", "output"],
-  system: ["system", "sistema", "context", "contexto", "system_prompt"]
+  system: ["system", "sistema", "context", "contexto", "system_prompt"],
+  reasoning: ["reasoning_content", "reasoning", "raciocinio", "think", "thinking"]
 };
 
 function suggestColumn(columns, role) {
@@ -160,15 +161,17 @@ function mappedRecord(row, mapping) {
   if (mapping === null) return { messages: row.value.messages };
 
   const messages = [];
-  for (const role of ["system", "user", "assistant"]) {
+  for (const role of ["system", "user", "assistant", "reasoning"]) {
     const column = mapping[role];
     if (column === undefined) continue;
     const value = Object.hasOwn(row.value, column) ? row.value[column] : null;
-    if (role === "system" && (value == null || (typeof value === "string" && !value.trim()))) continue;
+    if ((role === "system" || role === "reasoning") &&
+        (value == null || (typeof value === "string" && !value.trim()))) continue;
     if (typeof value !== "string" || !value.trim()) {
       throw new Error('a coluna "' + column + '" precisa conter texto.');
     }
-    messages.push({ role, content: value });
+    if (role === "reasoning") messages.at(-1).reasoning_content = value;
+    else messages.push({ role, content: value });
   }
   return { messages };
 }

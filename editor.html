@@ -115,6 +115,7 @@ dialog::backdrop { background: #20203399 }
     <label>Usuário<select id="column-user"></select></label>
     <label>Assistente<select id="column-assistant"></select></label>
     <label>Sistema (opcional)<select id="column-system"></select></label>
+    <label>Raciocínio (opcional)<select id="column-reasoning"></select></label>
   </div>
   <p class="hint" id="import-hint"></p>
   <details id="mapped-details" hidden>
@@ -179,9 +180,20 @@ function recordFor(draft) {
   const messages = draft.system.trim() ? [{ role: "system", content: draft.system.trim() }] : [];
   for (const turn of draft.turns) {
     messages.push({ role: "user", content: turn.user.trim() });
-    messages.push({ role: "assistant", content: turn.assistant.trim() });
+    const response = { role: "assistant", content: turn.assistant.trim() };
+    const reasoning = turn.reasoning?.trim();
+    if (reasoning) response.reasoning_content = reasoning;
+    messages.push(response);
   }
   return { messages };
+}
+
+function draftText(value, label) {
+  if (typeof value !== "string" || !value.trim()) throw new Error(label + ": esperado texto.");
+  if (/<\|[^\s<>]*\|>|<\/?(?:think|tool_call|tool_response)>|\x00|[\uD800-\uDFFF]/u.test(value)) {
+    throw new Error(label + ": marcador reservado ou Unicode inválido.");
+  }
+  return value.trim();
 }
 
 function draftFor(record) {
@@ -195,16 +207,22 @@ function draftFor(record) {
   }
   record.messages.forEach((message, index) => {
     const role = index < first ? "system" : ["user", "assistant"][(index - first) % 2];
-    if (!message || Object.keys(message).length !== 2 || message.role !== role ||
-        typeof message.content !== "string" || !message.content.trim()) {
-      throw new Error("Mensagem " + (index + 1) + ": esperado texto no papel " + role + ".");
+    const label = "Mensagem " + (index + 1);
+    const allowed = role === "assistant" ? ["role", "content", "reasoning_content"] : ["role", "content"];
+    if (!isImportObject(message) || message.role !== role ||
+        Object.keys(message).some(key => !allowed.includes(key))) {
+      throw new Error(label + ": campos inválidos para o papel " + role + ".");
     }
-    if (/<\|[^\s<>]*\|>|<\/?(?:think|tool_call|tool_response)>|\x00|[\uD800-\uDFFF]/u.test(message.content)) {
-      throw new Error("Mensagem " + (index + 1) + ": marcador reservado ou Unicode inválido.");
+    const content = draftText(message.content, label);
+    if (role === "system") draft.system = content;
+    if (role === "user") draft.turns.push({ user: content, assistant: "" });
+    if (role === "assistant") {
+      const turn = draft.turns.at(-1);
+      turn.assistant = content;
+      if (Object.hasOwn(message, "reasoning_content")) {
+        turn.reasoning = draftText(message.reasoning_content, label + " · raciocínio");
+      }
     }
-    if (role === "system") draft.system = message.content.trim();
-    if (role === "user") draft.turns.push({ user: message.content.trim(), assistant: "" });
-    if (role === "assistant") draft.turns.at(-1).assistant = message.content.trim();
   });
   return draft;
 }
@@ -251,11 +269,12 @@ function draw() {
 
   const preview = document.createElement("pre");
   const refreshPreview = () => { preview.textContent = JSON.stringify(recordFor(draft)); };
-  function field(title, target, property) {
+  function field(title, target, property, container = editor) {
     const label = document.createElement("label");
     label.textContent = title;
     const input = document.createElement("textarea");
-    input.value = target[property];
+    input.value = target[property] ?? "";
+    input.dataset.field = property;
     input.addEventListener("input", () => {
       target[property] = input.value;
       status("");
@@ -264,13 +283,23 @@ function draw() {
       refreshPreview();
     });
     label.append(input);
-    editor.append(label);
+    container.append(label);
   }
 
   field("Instrução de sistema (opcional)", draft, "system");
   draft.turns.forEach((turn, index) => {
     editor.append(document.createElement("hr"));
     field("Usuário · turno " + (index + 1), turn, "user");
+    const think = document.createElement("details");
+    think.open = Boolean(turn.reasoning?.trim());
+    const heading = document.createElement("summary");
+    heading.textContent = "Raciocínio / Think (opcional)";
+    const hint = document.createElement("p");
+    hint.className = "hint";
+    hint.textContent = "Escreva os passos que levam à resposta final, sem as tags <think>. Use --think ao treinar exemplos com raciocínio.";
+    think.append(heading, hint);
+    field("Passos do raciocínio · turno " + (index + 1), turn, "reasoning", think);
+    editor.append(think);
     field("Assistente · turno " + (index + 1), turn, "assistant");
     if (draft.turns.length > 1) {
       editor.append(button("Remover turno " + (index + 1), () => {
@@ -288,7 +317,7 @@ function draw() {
     draft.turns.push({ user: "", assistant: "" });
     save();
     draw();
-    editor.querySelectorAll("textarea")[draft.turns.length * 2 - 1].focus();
+    editor.querySelectorAll('textarea[data-field="user"]')[draft.turns.length - 1].focus();
   }), button("Excluir conversa", () => {
     if (!confirm("Excluir esta conversa?")) return;
     groups[split].splice(selected, 1);
@@ -316,12 +345,12 @@ $("new").addEventListener("click", () => {
   status("");
   save();
   draw();
-  $("editor").querySelectorAll("textarea")[1].focus();
+  $("editor").querySelector('textarea[data-field="user"]').focus();
 });
 
 let importTables = [];
 let preparedImport = [];
-const importRoles = { user: "Usuário", assistant: "Assistente", system: "Sistema" };
+const importRoles = ["user", "assistant", "system", "reasoning"];
 
 function setImportOptions(select, values) {
   select.replaceChildren();
@@ -368,9 +397,9 @@ function selectImportSource() {
   const allMessages = table.rows.every(row => row.error || Array.isArray(row.value?.messages));
   $("import-mode-field").hidden = !(hasMessages && hasColumns);
   $("import-mode").value = hasMessages && (allMessages || !hasColumns) ? "messages" : "columns";
-  for (const role of Object.keys(importRoles)) {
+  for (const role of importRoles) {
     const select = $("column-" + role);
-    const placeholder = role === "system" ? "Sem instrução de sistema" : "Selecione uma coluna";
+    const placeholder = { system: "Sem instrução de sistema", reasoning: "Sem raciocínio" }[role] ?? "Selecione uma coluna";
     setImportOptions(select, [[placeholder, -1], ...table.columns.map((name, index) => [name, index])]);
     select.value = String(suggestColumn(table.columns, role));
   }
@@ -401,7 +430,7 @@ function updateImportPreview() {
   let mapping = null;
   if (!native) {
     mapping = {};
-    for (const role of Object.keys(importRoles)) {
+    for (const role of importRoles) {
       const index = Number($("column-" + role).value);
       if (index >= 0) mapping[role] = table.columns[index];
     }
@@ -480,7 +509,7 @@ $("file").addEventListener("change", async () => {
 });
 $("source-table").addEventListener("change", selectImportSource);
 $("import-mode").addEventListener("change", updateImportMapping);
-for (const role of Object.keys(importRoles)) {
+for (const role of importRoles) {
   $("column-" + role).addEventListener("change", updateImportMapping);
 }
 $("skip-invalid").addEventListener("change", updateImportPreview);

@@ -39,7 +39,24 @@ Cada linha do JSONL é um objeto independente em UTF-8, sem BOM, vírgula entre 
 {"messages":[{"role":"system","content":"Converse em português brasileiro, de forma breve e natural."},{"role":"user","content":"Quero voltar a ler."},{"role":"assistant","content":"Que tipo de história você costuma gostar?"},{"role":"user","content":"Mistério."},{"role":"assistant","content":"Comece com um conto policial curto. Assim você consegue terminar uma história sem precisar separar muito tempo."}]}
 ```
 
-O único campo externo é `messages`. Cada mensagem tem exatamente `role` e `content`. O conteúdo é texto não vazio. Use `system` só no início, se precisar, seguido de um ou mais pares `user` → `assistant`. Deixe o assistente fechar a conversa. Dentro de uma string JSON, represente quebras de linha como `\n` e aspas como `\"`. O editor faz isso automaticamente. O tokenizer acrescenta os marcadores do Qwen, como `<|im_start|>`, e monta o prompt com o modo de raciocínio desativado.
+O único campo externo é `messages`. Cada mensagem tem `role` e `content` com texto não vazio. Use `system` só no início, se precisar, seguido de um ou mais pares `user` → `assistant`. Deixe o assistente fechar a conversa. Dentro de uma string JSON, represente quebras de linha como `\n` e aspas como `\"`. O editor faz isso automaticamente. O tokenizer acrescenta os marcadores do Qwen, como `<|im_start|>`.
+
+### Exemplos com Think
+
+Abra **Raciocínio / Think (opcional)** em um turno do editor. Preencha os passos e escreva a resposta final no campo **Assistente**. O JSONL guarda os passos no campo `reasoning_content` da mensagem do assistente. Também dá para mapear uma coluna de raciocínio ao importar arquivos. Deixe as tags `<think>` por conta do script.
+
+```jsonl
+{"messages":[{"role":"user","content":"Tenho 36 moedas e gastei 25%. Quanto sobrou?"},{"role":"assistant","reasoning_content":"25% é um quarto de 36, ou seja, 9. Então 36 − 9 = 27.","content":"Sobraram 27 moedas."}]}
+```
+
+Para testar esse formato, guarde o JSONL exportado em `data/chat/treino-think.jsonl` e execute os comandos no ambiente virtual:
+
+```bash
+python dataset.py --qwen --think --max-length 512 data/chat/treino-think.jsonl
+python lora.py train --think --train data/chat/treino-think.jsonl --max-length 512 --steps 2 --accumulation 1 --output outputs/smoke-think
+```
+
+O teste de dois passos verifica o fluxo. Para treinar por uma época, use `--epochs 1` no lugar de `--steps 2` e escolha uma nova pasta de saída. Com `--think`, as respostas que têm raciocínio são treinadas com Think. As respostas sem esse campo usam o formato direto. No laboratório, selecione o adaptador e ligue **Think** para testar com perguntas novas.
 
 ## 3. Valide os arquivos
 

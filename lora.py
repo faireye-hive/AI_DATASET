@@ -13,7 +13,7 @@ def train(args):
     if args.output.exists() and (not args.output.is_dir() or any(args.output.iterdir())):
         raise ValueError("use uma pasta de saída nova ou vazia")
     tokenizer = load_tokenizer()
-    encoded = [encode_records(tokenizer, rows, args.max_length) for rows in splits]
+    encoded = [encode_records(tokenizer, rows, args.max_length, think=args.think) for rows in splits]
 
     import torch
     from peft import LoraConfig, get_peft_model
@@ -114,6 +114,7 @@ def main():
     training.add_argument("--validation", type=Path)
     training.add_argument("--output", type=Path, required=True)
     training.add_argument("--max-length", type=positive_int, default=MAX_LENGTH)
+    training.add_argument("--think", action="store_true", help="treina raciocínio nas respostas com reasoning_content")
     training.add_argument("--epochs", type=positive_int, default=1)
     training.add_argument("--steps", type=positive_int, default=-1)
     training.add_argument("--accumulation", type=positive_int, default=4)
