@@ -91,14 +91,13 @@ Em `outputs/chat-lora/`, o treino salva os pesos e a configuração do adaptador
 Na raiz do projeto, ative o ambiente virtual com as dependências do treino e inicie o servidor do chat. Se o servidor do editor estiver usando a porta 8765, encerre-o com `Ctrl+C` primeiro. Use o mesmo endereço e porta do editor para acessar seus rascunhos.
 
 ```bash
-source .venv/bin/activate
-python chat_server.py
+env -u PYTHONPATH -u PYTHONHOME .venv/bin/python chat_server.py
 ```
 
 Abra o [Laboratório de chat](http://127.0.0.1:8765/chat.html). Selecione o Qwen3-0.6B original ou um adaptador salvo diretamente em uma subpasta de `outputs/`. Depois de treinar outro adaptador, clique em **Atualizar adaptadores**.
 
-Para comparar, envie uma pergunta, troque o modelo ou o modo **Think** e clique em **Repetir última pergunta**. As versões ficam juntas no histórico, e a última resposta com texto é usada no turno seguinte. Com Think ligado, abra **Ver raciocínio** quando o modelo gerar esse trecho. O limite de tokens inclui o raciocínio e a resposta final.
+Para comparar, envie uma pergunta, troque o modelo ou o modo **Think** e clique em **Repetir última pergunta**. As versões ficam juntas no histórico, e a última resposta com texto é usada no turno seguinte. O chat mostra o texto conforme ele é gerado. Com Think ligado, o raciocínio aparece separado da resposta final e pode ser reaberto depois. O limite de tokens inclui os dois trechos.
 
-O servidor roda na CPU e só escuta em `127.0.0.1`. A primeira pergunta carrega o modelo. Use **Nova conversa** para limpar o histórico do chat.
+O servidor roda na CPU e só escuta em `127.0.0.1`. A primeira pergunta carrega o modelo. Use **Nova conversa** para limpar o histórico do chat. Se aparecer um erro de `PIL._imaging`, reinicie o servidor com o comando acima para usar o ambiente virtual sem caminhos Python herdados do terminal.
 
 Referências oficiais · [Qwen3-0.6B](https://huggingface.co/Qwen/Qwen3-0.6B) · [Formato conversacional](https://huggingface.co/docs/trl/dataset_formats) · [PEFT LoRA](https://huggingface.co/docs/peft/en/package_reference/lora)

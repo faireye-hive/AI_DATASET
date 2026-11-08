@@ -106,7 +106,7 @@ class ChatEngine:
         self.model.eval()
         return self.model
 
-    def generate(self, messages, adapter, thinking, limit):
+    def generate(self, messages, adapter, thinking, limit, on_text=None):
         import torch
 
         if self.tokenizer is None:
@@ -121,6 +121,18 @@ class ChatEngine:
         model = self.select_model(adapter)
         inputs = torch.tensor([ids])
         adapter_context = model.disable_adapter() if adapter is None and self.adapter else nullcontext()
+        generation_options = {}
+        if on_text is not None:
+            from transformers import TextStreamer
+
+            class ReplyStreamer(TextStreamer):
+                def on_finalized_text(self, text, stream_end=False):
+                    if text:
+                        on_text(text)
+
+            generation_options["streamer"] = ReplyStreamer(
+                tokenizer, skip_prompt=True, skip_special_tokens=True
+            )
         torch.manual_seed(42)
         with torch.inference_mode(), adapter_context:
             output = model.generate(
@@ -129,6 +141,7 @@ class ChatEngine:
                 temperature=0.6 if thinking else 0.7,
                 top_p=0.95 if thinking else 0.8, top_k=20,
                 pad_token_id=tokenizer.pad_token_id, use_cache=True,
+                **generation_options,
             )
         generated = output[0, len(ids):].tolist()
         eos = model.generation_config.eos_token_id
@@ -159,6 +172,15 @@ class ChatEngine:
 ENGINE = ChatEngine()
 
 
+def model_error(error):
+    if "_imaging" in str(error) and "PIL" in str(error):
+        return (
+            "O servidor carregou um Pillow incompatível. Encerre-o e, na pasta do projeto, "
+            "rode: env -u PYTHONPATH -u PYTHONHOME .venv/bin/python chat_server.py"
+        )
+    return f"Falha ao rodar o modelo. {error}"
+
+
 class Handler(BaseHTTPRequestHandler):
     def allowed(self):
         host = self.headers.get("Host")
@@ -182,6 +204,31 @@ class Handler(BaseHTTPRequestHandler):
 
     def send_json(self, status, data):
         self.send_body(status, json.dumps(data, ensure_ascii=True).encode(), "application/json")
+
+    def send_event(self, event, **data):
+        line = json.dumps({"type": event, **data}, ensure_ascii=True) + "\n"
+        self.wfile.write(line.encode())
+        self.wfile.flush()
+
+    def stream_chat(self, args):
+        self.close_connection = True
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        try:
+            reply = ENGINE.generate(*args, on_text=lambda text: self.send_event("delta", text=text))
+        except (BrokenPipeError, ConnectionResetError):
+            raise
+        except ValueError as error:
+            self.send_event("error", error=str(error))
+        except Exception as error:
+            self.log_error("Falha no modelo: %s", error)
+            self.send_event("error", error=model_error(error))
+        else:
+            self.send_event("done", **reply)
 
     def do_GET(self):
         if not self.allowed():
@@ -207,7 +254,8 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", "0"))
             if not 1 <= length <= MAX_BODY:
                 raise ValueError("O pedido está vazio ou excede o tamanho permitido.")
-            args = chat_input(json.loads(self.rfile.read(length)))
+            body = json.loads(self.rfile.read(length))
+            args = chat_input(body)
         except (ValueError, UnicodeError) as error:
             self.send_json(400, {"error": str(error)})
             return
@@ -216,14 +264,17 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(409, {"error": "O modelo ainda está gerando outra resposta."})
             return
         try:
-            reply = ENGINE.generate(*args)
+            if body.get("stream") is True:
+                self.stream_chat(args)
+            else:
+                self.send_json(200, ENGINE.generate(*args))
+        except (BrokenPipeError, ConnectionResetError):
+            pass
         except ValueError as error:
             self.send_json(400, {"error": str(error)})
         except Exception as error:
             self.log_error("Falha no modelo: %s", error)
-            self.send_json(500, {"error": f"Falha ao rodar o modelo. {error}"})
-        else:
-            self.send_json(200, reply)
+            self.send_json(500, {"error": model_error(error)})
         finally:
             ENGINE.lock.release()
 

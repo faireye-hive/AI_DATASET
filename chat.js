@@ -9,13 +9,15 @@ function showStatus(message, error = false) {
   $("status").classList.toggle("error", error);
 }
 
-async function api(path, options) {
-  let response;
+async function fetchLocal(path, options) {
   try {
-    response = await fetch(path, options);
+    return await fetch(path, options);
   } catch {
     throw new Error("Abra o editor com python chat_server.py para conectar ao modelo local.");
   }
+}
+
+async function jsonResponse(response) {
   if (!response.headers.get("Content-Type")?.includes("application/json")) {
     throw new Error("Para usar o chat, inicie python chat_server.py no lugar de python -m http.server.");
   }
@@ -24,10 +26,41 @@ async function api(path, options) {
   return data;
 }
 
+async function requestChat(body, onText) {
+  const response = await fetchLocal("/api/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...body, stream: true })
+  });
+  if (!response.ok || !response.headers.get("Content-Type")?.includes("application/x-ndjson")) {
+    return jsonResponse(response);
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let pending = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) throw new Error("A conexão terminou antes do fim da geração.");
+      pending += decoder.decode(value, { stream: true });
+      const lines = pending.split("\n");
+      pending = lines.pop();
+      for (const line of lines) {
+        const event = JSON.parse(line);
+        if (event.type === "delta") onText(event.text);
+        if (event.type === "error") throw new Error(event.error);
+        if (event.type === "done") return event;
+      }
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+}
+
 async function refreshAdapters() {
   $("refresh").disabled = true;
   try {
-    const { adapters } = await api("/api/adapters");
+    const { adapters } = await jsonResponse(await fetchLocal("/api/adapters"));
     const select = $("model");
     const previous = select.value;
     select.replaceChildren(new Option("Qwen3-0.6B original", ""));
@@ -104,6 +137,59 @@ function messagesFor(question, precedingTurns) {
   return messages;
 }
 
+function withoutPartialTag(text, tag) {
+  for (let length = tag.length - 1; length > 0; length--) {
+    if (text.endsWith(tag.slice(0, length))) return text.slice(0, -length);
+  }
+  return text;
+}
+
+function liveParts(text) {
+  const opening = "<think>";
+  const closing = "</think>";
+  const end = text.indexOf(closing);
+  const start = text.indexOf(opening);
+  if (end !== -1) {
+    return { thought: text.slice(start === -1 ? 0 : start + opening.length, end), answer: text.slice(end + closing.length) };
+  }
+  if (start !== -1) {
+    return { thought: withoutPartialTag(text.slice(start + opening.length), closing), answer: "" };
+  }
+  return { thought: "", answer: withoutPartialTag(text, opening) };
+}
+
+function startLiveReply(question, label, think, retry) {
+  const transcript = $("transcript");
+  if (!turns.length) transcript.replaceChildren();
+  const block = retry ? transcript.lastElementChild : element("article", "", "turn");
+  if (!retry) {
+    const prompt = element("div", "", "bubble question");
+    prompt.append(element("strong", "Você"), element("p", question, "message"));
+    block.append(prompt);
+    transcript.append(block);
+  }
+  const reply = element("div", "", "bubble answer");
+  const output = element("p", "Aguardando os primeiros tokens…", "message");
+  const reasoning = element("p", "", "message");
+  const details = element("details");
+  details.open = true;
+  details.hidden = true;
+  details.append(element("summary", "Raciocínio em andamento"), reasoning);
+  reply.append(element("strong", label + (think ? " · Think" : "")), details, output);
+  block.append(reply);
+  transcript.scrollTop = transcript.scrollHeight;
+  let text = "";
+  return delta => {
+    text += delta;
+    const { thought, answer } = liveParts(text);
+    details.hidden = !think || !thought.trim();
+    reasoning.textContent = thought.trimStart();
+    output.hidden = !answer.trim() && !details.hidden;
+    output.textContent = answer.trimStart() || "Aguardando a resposta final…";
+    transcript.scrollTop = transcript.scrollHeight;
+  };
+}
+
 async function generate(retry) {
   if (busy || !$("composer").reportValidity()) return;
   const question = retry ? turns.at(-1).question : $("prompt").value.trim();
@@ -124,9 +210,13 @@ async function generate(retry) {
   busy = true;
   updateButtons();
   showStatus("Gerando na CPU… A primeira resposta também carrega o modelo.");
+  const renderDelta = startLiveReply(question, label, think, retry);
+  let receivedText = false;
   try {
-    const variant = await api("/api/chat", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+    const variant = await requestChat(body, delta => {
+      if (!receivedText) showStatus("Gerando na CPU…");
+      receivedText = true;
+      renderDelta(delta);
     });
     const turn = retry ? turns.at(-1) : { question, variants: [] };
     turn.variants.push({ ...variant, label, think });
@@ -138,6 +228,7 @@ async function generate(retry) {
     draw();
   } catch (error) {
     showStatus(error.message, true);
+    draw();
   } finally {
     busy = false;
     updateButtons();
