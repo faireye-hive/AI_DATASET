@@ -86,14 +86,15 @@ def chat(args):
     if args.system:
         messages.append({"role": "system", "content": args.system})
     messages.append({"role": "user", "content": args.prompt})
-    ids = torch.tensor([prompt_ids(tokenizer, messages)])
+    ids = torch.tensor([prompt_ids(tokenizer, messages, thinking=args.think)])
     model.eval()
     torch.manual_seed(42)
     with torch.inference_mode():
         output = model.generate(
             input_ids=ids, attention_mask=torch.ones_like(ids),
             max_new_tokens=args.max_new_tokens, do_sample=True,
-            temperature=0.7, top_p=0.8, top_k=20,
+            temperature=0.6 if args.think else 0.7,
+            top_p=0.95 if args.think else 0.8, top_k=20,
             eos_token_id=tokenizer.eos_token_id, pad_token_id=tokenizer.pad_token_id,
         )
     print(tokenizer.decode(output[0, ids.shape[1]:], skip_special_tokens=True).strip())
@@ -123,6 +124,7 @@ def main():
     inference.add_argument("--prompt", required=True)
     inference.add_argument("--system")
     inference.add_argument("--adapter", type=Path)
+    inference.add_argument("--think", action="store_true", help="ativa o modo de raciocínio do Qwen")
     inference.add_argument("--max-new-tokens", type=positive_int, default=96)
     args = parser.parse_args()
     try:
