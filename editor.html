@@ -33,6 +33,16 @@ button.primary, button[aria-current=true] { background: #5143b0; color: #fff; bo
 small, .hint { color: #575765 }
 hr { border: 0; border-top: 1px solid #e8e8ee; margin: 1rem 0 }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #f6f6f8; padding: .7rem }
+dialog { width: min(46rem, calc(100% - 2rem)); max-height: 88vh; border: 1px solid #dedee7; border-radius: 14px; padding: clamp(1rem, 4vw, 1.6rem); color: inherit }
+dialog::backdrop { background: #20203399 }
+.import-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); gap: 0 .75rem }
+.import-fields[hidden] { display: none }
+.source-preview { max-height: 12rem; overflow: auto; margin-top: .4rem }
+.source-preview table { width: 100%; border-collapse: collapse; font-size: .9rem }
+.source-preview th, .source-preview td { padding: .35rem .55rem; border-bottom: 1px solid #e8e8ee; text-align: left; white-space: pre-wrap; overflow-wrap: anywhere; min-width: 7rem; vertical-align: top }
+.source-preview th { background: #f6f6f8 }
+#mapped-preview { max-height: 10rem; overflow: auto }
+#import-errors, #import-storage-error { color: #9e2323 }
 @media (max-width: 690px) { main { grid-template-columns: 1fr } }
 </style>
 </head>
@@ -58,11 +68,11 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #f6f6f8; paddi
     </div>
     <hr>
     <div class="actions">
-      <button type="button" id="import">Importar JSONL</button>
-      <input id="file" type="file" accept=".jsonl,.txt" hidden>
+      <button type="button" id="import">Importar arquivo</button>
+      <input id="file" type="file" accept=".csv,.json,.jsonl,.ndjson,.txt" hidden>
       <button type="button" class="primary" id="export">Baixar JSONL</button>
     </div>
-    <small>A importação acrescenta conversas ao conjunto aberto. Baixe cópias dos seus rascunhos.</small>
+    <small>Importe CSV, JSON ou JSONL. Baixe cópias dos seus rascunhos.</small>
   </section>
   <section aria-labelledby="conversation-title">
     <h2 id="conversation-title">Conversa</h2>
@@ -70,6 +80,52 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #f6f6f8; paddi
     <p id="status" role="status" aria-live="polite"></p>
   </section>
 </main>
+<dialog id="import-dialog" aria-labelledby="import-title">
+  <h2 id="import-title">Importar conversas</h2>
+  <p class="hint" id="import-name"></p>
+  <div class="import-fields">
+    <label id="source-table-field" hidden>Tabela de origem<select id="source-table"></select></label>
+    <label>Adicionar ao conjunto
+      <select id="import-destination">
+        <option value="treino">Treino</option>
+        <option value="validacao">Validação</option>
+        <option value="teste">Teste</option>
+      </select>
+    </label>
+    <label id="import-mode-field" hidden>Formato das conversas
+      <select id="import-mode">
+        <option value="columns">Mapear colunas</option>
+        <option value="messages">Usar os turnos de messages</option>
+      </select>
+    </label>
+  </div>
+  <details open>
+    <summary>Prévia do arquivo</summary>
+    <div class="source-preview" id="source-preview" tabindex="0" aria-label="Amostra da tabela de origem"></div>
+  </details>
+  <hr>
+  <div id="import-mapping" class="import-fields">
+    <label>Usuário<select id="column-user"></select></label>
+    <label>Assistente<select id="column-assistant"></select></label>
+    <label>Sistema (opcional)<select id="column-system"></select></label>
+  </div>
+  <p class="hint" id="import-hint"></p>
+  <details id="mapped-details" hidden>
+    <summary>Como a primeira conversa vai ficar</summary>
+    <pre id="mapped-preview"></pre>
+  </details>
+  <p id="import-summary" role="status"></p>
+  <ul id="import-errors" hidden></ul>
+  <label id="skip-invalid-field" hidden>
+    <input type="checkbox" id="skip-invalid"> Ignorar as linhas inválidas
+  </label>
+  <p id="import-storage-error" role="alert" hidden></p>
+  <div class="actions">
+    <button type="button" id="import-cancel">Cancelar</button>
+    <button type="button" class="primary" id="import-confirm" disabled>Importar conversas</button>
+  </div>
+</dialog>
+<script src="import-data.js"></script>
 <script>
 "use strict";
 
@@ -160,15 +216,17 @@ function recordName(draft, index) {
 }
 
 function drawList() {
-  $("records").replaceChildren(...groups[split].map((draft, index) => {
+  const list = document.createDocumentFragment();
+  groups[split].forEach((draft, index) => {
     const item = button(recordName(draft, index), () => {
       selected = index;
       status("");
       draw();
     });
     item.setAttribute("aria-current", String(index === selected));
-    return item;
-  }));
+    list.append(item);
+  });
+  $("records").replaceChildren(list);
   const count = groups[split].length;
   $("count").textContent = count + (count === 1 ? " conversa" : " conversas");
   $("export").disabled = count === 0;
@@ -180,7 +238,7 @@ function draw() {
   editor.replaceChildren();
   const draft = current();
   if (!draft) {
-    editor.textContent = "Crie uma conversa ou importe um arquivo JSONL para começar.";
+    editor.textContent = "Crie uma conversa ou importe um arquivo para começar.";
     return;
   }
 
@@ -254,33 +312,194 @@ $("new").addEventListener("click", () => {
   $("editor").querySelectorAll("textarea")[1].focus();
 });
 
+let importTables = [];
+let preparedImport = [];
+const importRoles = { user: "Usuário", assistant: "Assistente", system: "Sistema" };
+
+function setImportOptions(select, values) {
+  select.replaceChildren();
+  values.forEach(([label, value]) => select.add(new Option(label, value)));
+}
+
+function previewImportCell(value) {
+  if (value == null) return "—";
+  const text = typeof value === "string" ? value : JSON.stringify(value);
+  return text.length > 180 ? text.slice(0, 180) + "…" : text;
+}
+
+function drawImportSource(table) {
+  const preview = $("source-preview");
+  preview.replaceChildren();
+  if (!table.columns.length) {
+    preview.textContent = "Nenhum campo encontrado.";
+    return;
+  }
+  const sample = document.createElement("table");
+  const header = sample.createTHead().insertRow();
+  for (const name of ["Origem", ...table.columns]) {
+    const cell = document.createElement("th");
+    cell.scope = "col";
+    cell.textContent = name;
+    header.append(cell);
+  }
+  const body = sample.createTBody();
+  for (const row of table.rows.slice(0, 5)) {
+    const cells = body.insertRow();
+    cells.insertCell().textContent = row.location;
+    for (const name of table.columns) {
+      const value = isImportObject(row.value) && Object.hasOwn(row.value, name) ? row.value[name] : null;
+      cells.insertCell().textContent = previewImportCell(value);
+    }
+  }
+  preview.append(sample);
+}
+
+function selectImportSource() {
+  const table = importTables[Number($("source-table").value)];
+  const hasMessages = table.rows.some(row => Array.isArray(row.value?.messages));
+  const hasColumns = table.columns.some(column => column !== "messages");
+  const allMessages = table.rows.every(row => row.error || Array.isArray(row.value?.messages));
+  $("import-mode-field").hidden = !(hasMessages && hasColumns);
+  $("import-mode").value = hasMessages && (allMessages || !hasColumns) ? "messages" : "columns";
+  for (const role of Object.keys(importRoles)) {
+    const select = $("column-" + role);
+    const placeholder = role === "system" ? "Sem instrução de sistema" : "Selecione uma coluna";
+    setImportOptions(select, [[placeholder, -1], ...table.columns.map((name, index) => [name, index])]);
+    select.value = String(suggestColumn(table.columns, role));
+  }
+  drawImportSource(table);
+  updateImportMapping();
+}
+
+function updateImportMapping() {
+  $("skip-invalid").checked = false;
+  updateImportPreview();
+}
+
+function updateImportPreview() {
+  const table = importTables[Number($("source-table").value)];
+  const native = $("import-mode").value === "messages";
+  $("import-mapping").hidden = native;
+  $("import-hint").textContent = native
+    ? "As conversas mantêm os papéis e os turnos do arquivo."
+    : "Cada linha vira uma conversa com uma mensagem do usuário e uma resposta do assistente.";
+  $("import-storage-error").hidden = true;
+  $("import-errors").replaceChildren();
+  $("import-errors").hidden = true;
+  $("mapped-details").hidden = true;
+  $("skip-invalid-field").hidden = true;
+  $("import-confirm").disabled = true;
+  preparedImport = [];
+
+  let mapping = null;
+  if (!native) {
+    mapping = {};
+    for (const role of Object.keys(importRoles)) {
+      const index = Number($("column-" + role).value);
+      if (index >= 0) mapping[role] = table.columns[index];
+    }
+    if (mapping.user === undefined || mapping.assistant === undefined) {
+      $("import-summary").textContent = "Escolha as colunas de Usuário e Assistente.";
+      return;
+    }
+    if (new Set(Object.values(mapping)).size !== Object.keys(mapping).length) {
+      $("import-summary").textContent = "Escolha uma coluna diferente para cada papel.";
+      return;
+    }
+  }
+
+  const seen = new Set();
+  for (const drafts of Object.values(groups)) {
+    for (const draft of drafts) seen.add(JSON.stringify(recordFor(draft)));
+  }
+  let duplicates = 0;
+  let invalid = 0;
+  for (const row of table.rows) {
+    try {
+      const draft = draftFor(mappedRecord(row, mapping));
+      const identity = JSON.stringify(recordFor(draft));
+      if (seen.has(identity)) {
+        duplicates++;
+      } else {
+        seen.add(identity);
+        preparedImport.push(draft);
+      }
+    } catch (error) {
+      invalid++;
+      if (invalid <= 5) {
+        const item = document.createElement("li");
+        item.textContent = row.location + ": " + error.message;
+        $("import-errors").append(item);
+      }
+    }
+  }
+  $("import-summary").textContent = [
+    preparedImport.length + " prontas para importar",
+    duplicates ? duplicates + " duplicadas serão ignoradas" : "",
+    invalid ? invalid + " inválidas" : ""
+  ].filter(Boolean).join(" · ");
+  $("import-errors").hidden = invalid === 0;
+  $("skip-invalid-field").hidden = invalid === 0 || preparedImport.length === 0;
+  $("import-confirm").disabled = preparedImport.length === 0 || (invalid > 0 && !$("skip-invalid").checked);
+  if (preparedImport.length) {
+    $("mapped-preview").textContent = JSON.stringify(recordFor(preparedImport[0]), null, 2);
+    $("mapped-details").hidden = false;
+  }
+}
+
 $("import").addEventListener("click", () => $("file").click());
 $("file").addEventListener("change", async () => {
   const file = $("file").files[0];
-  const destination = split;
+  $("file").value = "";
   if (!file) return;
+  $("import").disabled = true;
+  status("");
   try {
-    const contents = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(await file.arrayBuffer());
-    const lines = contents.split(/\r?\n/);
-    if (lines.at(-1) === "") lines.pop();
-    if (!lines.length) throw new Error("O arquivo está vazio.");
-    const imported = lines.map((line, index) => {
-      try {
-        return draftFor(JSON.parse(line));
-      } catch (error) {
-        throw new Error("Linha " + (index + 1) + ": " + error.message);
-      }
-    });
-    const start = groups[destination].length;
-    groups[destination].push(...imported);
-    if (split === destination) selected = start;
-    if (save()) status(imported.length + " conversas importadas em " + labels[destination] + ".");
-    draw();
+    const contents = new TextDecoder("utf-8", { fatal: true }).decode(await file.arrayBuffer());
+    importTables = readImport(contents, file.name);
+    $("import-name").textContent = file.name;
+    $("import-destination").value = split;
+    setImportOptions($("source-table"), importTables.map((table, index) =>
+      [table.name + " (" + table.rows.length + " registros)", index]
+    ));
+    $("source-table-field").hidden = importTables.length === 1;
+    selectImportSource();
+    $("import-dialog").showModal();
   } catch (error) {
-    status(error.message, true);
+    status("Não foi possível abrir " + file.name + ". " + error.message, true);
   } finally {
-    $("file").value = "";
+    $("import").disabled = false;
   }
+});
+$("source-table").addEventListener("change", selectImportSource);
+$("import-mode").addEventListener("change", updateImportMapping);
+for (const role of Object.keys(importRoles)) {
+  $("column-" + role).addEventListener("change", updateImportMapping);
+}
+$("skip-invalid").addEventListener("change", updateImportPreview);
+$("import-cancel").addEventListener("click", () => $("import-dialog").close());
+$("import-dialog").addEventListener("close", () => {
+  importTables = [];
+  preparedImport = [];
+});
+$("import-confirm").addEventListener("click", () => {
+  if ($("import-confirm").disabled) return;
+  const destination = $("import-destination").value;
+  const previous = groups[destination];
+  const count = preparedImport.length;
+  groups[destination] = previous.concat(preparedImport);
+  if (!save()) {
+    groups[destination] = previous;
+    $("import-storage-error").textContent = "O navegador não conseguiu guardar a importação. Tente um arquivo menor.";
+    $("import-storage-error").hidden = false;
+    return;
+  }
+  split = destination;
+  $("split").value = split;
+  selected = previous.length;
+  $("import-dialog").close();
+  draw();
+  status(count + (count === 1 ? " conversa importada em " : " conversas importadas em ") + labels[destination] + ".");
 });
 
 $("export").addEventListener("click", () => {

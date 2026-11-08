@@ -21,6 +21,14 @@ O navegador salva rascunhos no endereço acima. Exporte pelo botão **Baixar JSO
 - **Validação** (`validacao.jsonl`) é opcional e mede a perda do modelo em exemplos separados.
 - **Teste** (`teste.jsonl`) é opcional e guarda conversas inéditas para comparar as respostas antes e depois. Mantenha reformulações quase idênticas no mesmo conjunto.
 
+### Importar conversas de outro arquivo
+
+Clique em **Importar arquivo** e escolha um CSV, JSON ou JSONL em UTF-8. O CSV precisa ter cabeçalho e pode usar vírgula, ponto e vírgula ou tabulação como separador. O JSON aceita um objeto, uma lista de registros ou um objeto com listas nomeadas, como `{"perguntas":[...],"dialogos":[...]}`. No JSONL, cada linha é um registro.
+
+Confira a prévia e escolha a tabela de origem, quando houver mais de uma. Em **Adicionar ao conjunto**, selecione Treino, Validação ou Teste. Depois, associe as colunas a **Usuário**, **Assistente** e, se houver, **Sistema**. Por exemplo, use a coluna `pergunta` para Usuário e `resposta` para Assistente. Cada linha mapeada cria uma conversa com um turno. Se o JSON ou JSONL já tiver `messages` com os papéis definidos, use esse campo para manter todos os turnos.
+
+O editor mostra linhas inválidas antes de importar e ignora conversas idênticas que já estão na coleção ou que se repetem no arquivo. As conversas são acrescentadas ao conjunto escolhido e ficam disponíveis para edição e exportação em JSONL.
+
 Escreva a resposta completa no tom desejado. Varie os assuntos e inclua situações que deixem o comportamento claro, como perguntas vagas em que o assistente pede um detalhe, correções em turnos seguintes e casos em que ele admite que não sabe. Para começar, escreva algumas conversas curtas e faça o teste de dois passos abaixo antes de ampliar a coleção.
 
 ## 2. Formato exato
